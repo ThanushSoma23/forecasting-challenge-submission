@@ -1,0 +1,192 @@
+"""Script to generate notebooks/workload_analysis.ipynb with clean, simplified code."""
+
+import json
+from pathlib import Path
+
+
+def main():
+    nb = {
+        "cells": [
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "# Cloud Workload Forecasting Challenge\n",
+                    "## Exploratory Data Analysis & Workload Forecasting Pipeline\n",
+                    "\n",
+                    "This notebook presents an end-to-end analysis of the Microsoft Azure Public Dataset V2 (`data-v1` release).\n",
+                    "We explore workload distributions, temporal autocorrelation, VM segmentation, and evaluate candidate forecasting models under strict leakage-safe expanding-window cross-validation.",
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": 1,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "import numpy as np\n",
+                    "import pandas as pd\n",
+                    "import matplotlib.pyplot as plt\n",
+                    "from pathlib import Path\n",
+                    "\n",
+                    "from cwfc.data import (\n",
+                    "    load_cpu_readings,\n",
+                    "    load_vm_metadata,\n",
+                    "    build_aggregate_targets,\n",
+                    "    split_train_holdout,\n",
+                    ")\n",
+                    "from cwfc.analysis import (\n",
+                    "    compute_workload_summary,\n",
+                    "    analyze_workload_segments,\n",
+                    "    analyze_autocorrelation,\n",
+                    ")\n",
+                    "from cwfc.forecasting import (\n",
+                    "    persistence_forecast,\n",
+                    "    moving_average_forecast,\n",
+                    "    mean_reverting_forecast,\n",
+                    ")\n",
+                    "from cwfc.evaluation import (\n",
+                    "    evaluate_temporal_cv,\n",
+                    "    evaluate_peak_performance,\n",
+                    ")\n",
+                    "from cwfc.metrics import mae, rmse, smape\n",
+                    "\n",
+                    "print('Imports successful.')\n",
+                ],
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 1. Data Ingestion & Target Aggregation\n",
+                    "We load the VM-level readings and metadata, and construct the two required aggregate targets:\n",
+                    "1. `active_vm_count`: count of unique VM IDs observed at each timestamp.\n",
+                    "2. `aggregate_cpu_utilization`: mean of VM-level `avg_cpu` values at each timestamp.",
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": 2,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "readings = load_cpu_readings('challenge_data/vm_cpu_readings.csv.gz')\n",
+                    "metadata = load_vm_metadata('challenge_data/vm_metadata.csv.gz')\n",
+                    "targets = build_aggregate_targets(readings)\n",
+                    "\n",
+                    "print(f'Readings rows: {len(readings):,}')\n",
+                    "print(f'Unique VMs: {readings[\"vm_id\"].nunique():,}')\n",
+                    "print(f'Aggregate Timestamps: {len(targets)}')\n",
+                    "targets.head()\n",
+                ],
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 2. Workload Distribution & VM Segmentation\n",
+                    "We examine the distribution of CPU utilization across individual VMs and compare profiles between Interactive and Delay-insensitive workload categories.",
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": 3,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "summary = compute_workload_summary(readings, metadata)\n",
+                    "print(f'Median VM CPU: {summary[\"avg_cpu_median\"]:.2f}%')\n",
+                    "print(f'Fraction < 5% CPU: {summary[\"idle_fraction_lt_5pct\"]*100:.2f}%')\n",
+                    "print(f'Fraction > 50% CPU: {summary[\"high_util_fraction_gt_50pct\"]*100:.2f}%')\n",
+                    "\n",
+                    "seg_df = analyze_workload_segments(readings, metadata)\n",
+                    "seg_df\n",
+                ],
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 3. Autocorrelation & Time Series Dynamics\n",
+                    "We inspect the serial correlation structure of the training series (first 110 observations) to identify memory and periodic cycles.",
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": 4,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "train_df, holdout_df = split_train_holdout(targets, train_size=110, holdout_size=24)\n",
+                    "acf_df = analyze_autocorrelation(train_df['aggregate_cpu_utilization'], max_lag=18)\n",
+                    "acf_df.head(10)\n",
+                ],
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 4. Expanding-Window Cross-Validation\n",
+                    "To select our production model without data leakage, we evaluate candidate models across 4 temporal validation folds strictly on the 110 training observations.",
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": 5,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "val_results = evaluate_temporal_cv(\n",
+                    "    train_df, target_col='aggregate_cpu_utilization', horizon=24, min_train_size=50, step=12\n",
+                    ")\n",
+                    "for name, stats in val_results.items():\n",
+                    "    print(f\"{name:20s} | MAE: {stats['mae_mean']:.4f} | RMSE: {stats['rmse_mean']:.4f} | Rel MAE: {stats['rel_mae']:.4f}\")\n",
+                ],
+            },
+            {
+                "cell_type": "markdown",
+                "metadata": {},
+                "source": [
+                    "## 5. Retrospective Holdout Evaluation\n",
+                    "Finally, we retrospectively evaluate our frozen predictions against the true holdout targets.",
+                ],
+            },
+            {
+                "cell_type": "code",
+                "execution_count": 6,
+                "metadata": {},
+                "outputs": [],
+                "source": [
+                    "preds = pd.read_csv('predictions.csv')\n",
+                    "h_true = holdout_df['aggregate_cpu_utilization'].values\n",
+                    "h_pred = preds['aggregate_cpu_utilization'].values\n",
+                    "\n",
+                    "print(f\"Holdout MAE:  {mae(h_true, h_pred):.4f}\")\n",
+                    "print(f\"Holdout RMSE: {rmse(h_true, h_pred):.4f}\")\n",
+                    "print(f\"Holdout sMAPE: {smape(h_true, h_pred):.3f}%\")\n",
+                ],
+            },
+        ],
+        "metadata": {
+            "kernelspec": {
+                "display_name": "Python 3",
+                "language": "python",
+                "name": "python3",
+            },
+            "language_info": {
+                "name": "python",
+                "version": "3.11.9",
+            },
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+    out_file = Path("notebooks/workload_analysis.ipynb")
+    with open(out_file, "w", encoding="utf-8") as f:
+        json.dump(nb, f, indent=2)
+    print(f"Successfully generated {out_file}")
+
+
+if __name__ == "__main__":
+    main()
