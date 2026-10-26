@@ -19,7 +19,7 @@ From the raw readings, we construct two required aggregate targets:
 - **Heavy Tail in VM Utilization:** Individual VMs are mostly idle (median CPU is $5.11\%$, and $49.05\%$ of readings are below $5\%$), but individual bursts reach up to $99.70\%$. When averaged over 10,000 VMs, aggregate CPU utilization is stable, staying within a narrow band of $8.98\%$ to $9.91\%$ with a mean of $9.39\%$ and standard deviation of $0.19\%$ percentage points.
 - **No VM Churn in Trace:** All 10,000 VMs exist throughout the trace. The earliest VM deletion in the metadata occurs after the trace window ends. Consequently, `active_vm_count` is constant at 10,000 across all 134 intervals.
 - **Model Selection via Expanding-Window Validation:** To avoid data leakage, models were evaluated exclusively on the first 110 training timestamps using expanding-window cross-validation with a 24-step horizon. A **mean-reversion forecasting rule with a fixed decay factor** ($\phi = 0.90$) achieved a cross-validation Mean Absolute Error (**MAE = 0.1876%**), outperforming the persistence baseline (MAE = 0.2056%) and a 15-minute moving average (MAE = 0.2353%).
-- **Retrospective Holdout Evaluation:** On the final 24 held-out timestamps, the mean-reversion rule achieved an **MAE of 0.1055%**, **RMSE of 0.1290%**, and **sMAPE of 1.138%**, compared to the persistence baseline's MAE of 0.1468% (a $28.1\%$ relative improvement).
+- **Retrospective Holdout Evaluation:** Evaluated strictly after freezing model selection and predictions, on the final 24 held-out timestamps the mean-reversion rule achieved an **MAE of 0.1055%**, **RMSE of 0.1290%**, and **sMAPE of 1.138%**, compared to the persistence baseline's MAE of 0.1468% (a $28.1\%$ relative error reduction). Holdout target observations were never used for model selection, fitting, or tuning.
 - **Practical Operational Takeaway:** Because individual VMs show significant burstiness even while fleet aggregate demand remains stable around $9.4\%$, infrastructure engineers cannot establish physical host capacity or headroom guarantees from aggregate CPU variability alone. Sizing must account for localized node contention and workload placement.
 
 ---
@@ -105,11 +105,11 @@ Interactive workloads show roughly $39\%$ higher average utilization and substan
 Computing autocorrelation on the 110 training observations shows:
 - **Lag 1 (5 mins):** $\rho_1 = 0.667$
 - **Lag 2 (10 mins):** $\rho_2 = 0.607$
-- **Lag 3 (15 mins):** $\rho_3 = 0.681$ (distinct 15-minute periodic spike)
+- **Lag 3 (15 mins):** $\rho_3 = 0.681$ (local peak at 15 minutes)
 - **Lag 6 (30 mins):** $\rho_6 = 0.477$
 - **Lag 12 (60 mins):** $\rho_{12} = 0.367$
 
-The spike at 15 minutes suggests recurring automated scripts or health checks commonly configured at 15-minute intervals.
+We observe a local peak in autocorrelation at lag 3 (15 minutes). While 15-minute intervals are a common operational cadence in cloud environments (such as scheduled tasks or monitoring checks), this should be treated strictly as an empirical time-series observation rather than conclusive proof of any specific workload mechanism or root cause.
 
 ![Autocorrelation Plot](figures/autocorrelation.png)
 
@@ -174,7 +174,9 @@ The mean-reversion rule achieved lower MAE and lower RMSE than both baselines ac
 Error is lowest at the 5-minute mark (0.0459%), rises over the first 30 minutes, and stabilizes as mean reversion anchors the forecast near the empirical average.
 
 ### 6.3 Retrospective Holdout Evaluation
-After freezing the model selection and generating `predictions.csv`, we evaluated retrospective performance against the true 24 holdout observations:
+Model selection and candidate design choices (such as the fixed $\phi = 0.90$) were decided strictly based on the training-set expanding-window cross-validation before generating `predictions.csv`. In strict compliance with the challenge protocol, the final 24 holdout observations were completely sealed and never used to fit, tune, or select models.
+
+Only after predictions were frozen was a retrospective evaluation performed against the true 24 holdout observations:
 
 | Target | Method | Holdout MAE | Holdout RMSE | Holdout sMAPE |
 |---|---|---|---|---|

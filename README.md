@@ -72,8 +72,6 @@ curl.exe -L -o data-v1.tar.gz https://github.com/atomityhq/forecasting-challenge
 tar -xzf data-v1.tar.gz -C challenge_data
 ```
 
-*(Note for regional ISP network resets on `*.githubusercontent.com`: If GitHub's asset CDN triggers connection resets, download directly from the underlying Azure Blob release storage mirror URL documented in `challenge_data/DATA_CARD.md`).*
-
 ### Verify Checksums
 
 #### Windows PowerShell
